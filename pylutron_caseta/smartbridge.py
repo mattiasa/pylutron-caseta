@@ -280,6 +280,37 @@ class Smartbridge:
 
         return (response, tag)
 
+    async def set_color_temp_kelvin(
+            self, device_id: str, color_temp_kelvin: int, fade_time: Optional[timedelta] = None
+    ):
+        """
+        Will set the color temperature in kelvin for a device with the given ID.
+
+        :param device_id: device id to set the value on
+        :param color_temp_kelvin: integer value from 0 to 100 to set
+        :param fade_time: duration for the light to fade from its current value to the
+        new value (only valid for lights)
+        """
+        device = self.devices[device_id]
+        zone_id = device.get("zone")
+        if not zone_id:
+            return
+        params = {"WhiteTuningLevel": {"Kelvin": color_temp_kelvin}}  # type: Dict[str, Union[str, Union[str, int]]]
+        if fade_time is not None:
+            params["FadeTime"] = _format_duration(fade_time)
+        await self._request(
+            "CreateRequest",
+            f"/zone/{zone_id}/commandprocessor",
+            {
+                "Command": {
+                    "CommandType": "GoToWhiteTuningLevel",
+                    "WhiteTuningLevelParameters": params,
+                }
+            },
+        )
+        return
+
+
     async def set_value(
         self, device_id: str, value: int, fade_time: Optional[timedelta] = None
     ):
@@ -306,6 +337,23 @@ class Smartbridge:
         # All other device types must have an associated zone ID
         zone_id = device.get("zone")
         if not zone_id:
+            return
+
+        # Handle Lumaris Tunable White Tape Light
+        if device.get("type") == "WhiteTune":
+            params = {"Level": value}  # type: Dict[str, Union[str, int]]
+            if fade_time is not None:
+                params["FadeTime"] = _format_duration(fade_time)
+            await self._request(
+                "CreateRequest",
+                f"/zone/{zone_id}/commandprocessor",
+                {
+                    "Command": {
+                        "CommandType": "GoToWhiteTuningLevel",
+                        "WhiteTuningLevelParameters": params,
+                    }
+                },
+            )
             return
 
         # Handle Ketra lamps
@@ -1013,9 +1061,28 @@ class Smartbridge:
             fan_speed = zone.get("FanSpeed", None)
             zone_name = zone["Name"]
             zone_type = zone["ControlType"]
+
+            min_color_temp_kelvin = zone.get(
+                'ColorTuningProperties', {}
+            ).get(
+                'WhiteTuningLevelRange', {}
+            ).get('Min')
+
+            max_color_temp_kelvin = zone.get(
+                'ColorTuningProperties', {}
+            ).get(
+                'WhiteTuningLevelRange', {}
+            ).get('Max')
+
             self.devices.setdefault(
                 zone_id,
-                {"device_id": zone_id, "current_state": level, "fan_speed": fan_speed},
+                {
+                    "device_id": zone_id,
+                    "current_state": level,
+                    "fan_speed": fan_speed,
+                    "min_color_temp_kelvin": min_color_temp_kelvin,
+                    "max_color_temp_kelvin": max_color_temp_kelvin
+                },
             ).update(
                 zone=zone_id,
                 name="_".join((area["name"], zone_name)),
